@@ -1,5 +1,6 @@
 // Copyright (C) 2014 The Syncthing Authors.
 //
+// Ported from https://github.com/syncthing/syncthing/tree/master/lib/upnp
 // Adapted from https://github.com/jackpal/Taipei-Torrent/blob/dd88a8bfac6431c01d959ce3c745e74b8a911793/IGD.go
 // Copyright (c) 2010 Jack Palevich (https://github.com/jackpal/Taipei-Torrent/blob/dd88a8bfac6431c01d959ce3c745e74b8a911793/LICENSE)
 //
@@ -47,7 +48,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anacrolix/log"
+	"github.com/op/go-logging"
+)
+
+var (
+	log = logging.MustGetLogger("main")
+
+	// Debug Set this to true to print debug information
+	Debug = false
 )
 
 func init() {
@@ -78,7 +86,7 @@ func Discover(renewal, timeout time.Duration) []Device {
 
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		log.Printf("Listing network interfaces: %s", err)
+		log.Errorf("Listing network interfaces: %s", err)
 		return results
 	}
 
@@ -110,14 +118,16 @@ func Discover(renewal, timeout time.Duration) []Device {
 nextResult:
 	for result := range resultChan {
 		if seenResults[result.ID()] {
-			log.Printf("Skipping duplicate result %s", result.ID())
+			if Debug {
+				log.Debugf("Skipping duplicate result %s", result.ID())
+			}
 			continue nextResult
 		}
 
 		results = append(results, result)
 		seenResults[result.ID()] = true
 
-		log.Printf("UPnP discovery result %s", result.ID())
+		log.Infof("UPnP discovery result %s", result.ID())
 	}
 
 	return results
@@ -140,32 +150,44 @@ USER-AGENT: go-torrent/1.0
 
 	search := []byte(strings.Replace(searchStr, "\n", "\r\n", -1))
 
-	log.Printf("Starting discovery of device type %s on %s", deviceType, intf.Name)
+	if Debug {
+		log.Debugf("Starting discovery of device type %s on %s", deviceType, intf.Name)
+	}
 
 	socket, err := net.ListenMulticastUDP("udp4", intf, &net.UDPAddr{IP: ssdp.IP})
 	if err != nil {
-		log.Printf("UPnP discovery: listening to udp multicast: %s", err)
+		if Debug {
+			log.Debugf("UPnP discovery: listening to udp multicast: %s", err)
+		}
 		return
 	}
 	defer socket.Close() // Make sure our socket gets closed
 
 	err = socket.SetDeadline(time.Now().Add(timeout))
 	if err != nil {
-		log.Printf("UPnP discovery: setting socket deadline: %s", err)
-		return
-	}
-
-	log.Printf("Sending search request for device type %s on %s", deviceType, intf.Name)
-
-	_, err = socket.WriteTo(search, ssdp)
-	if err != nil {
-		if e, ok := err.(net.Error); !ok || !e.Timeout() {
-			log.Printf("UPnP discovery: sending search request: %s", err)
+		if Debug {
+			log.Debugf("UPnP discovery: setting socket deadline: %s", err)
 		}
 		return
 	}
 
-	log.Printf("Listening for UPnP response for device type %s on %s", deviceType, intf.Name)
+	if Debug {
+		log.Debugf("Sending search request for device type %s on %s", deviceType, intf.Name)
+	}
+
+	_, err = socket.WriteTo(search, ssdp)
+	if err != nil {
+		if e, ok := err.(net.Error); !ok || !e.Timeout() {
+			if Debug {
+				log.Debugf("UPnP discovery: sending search request: %s", err)
+			}
+		}
+		return
+	}
+
+	if Debug {
+		log.Debugf("Listening for UPnP response for device type %s on %s", deviceType, intf.Name)
+	}
 
 	// Listen for responses until a timeout is reached
 	for {
@@ -173,13 +195,14 @@ USER-AGENT: go-torrent/1.0
 		n, _, err := socket.ReadFrom(resp)
 		if err != nil {
 			if e, ok := err.(net.Error); !ok || !e.Timeout() {
-				log.Printf("UPnP read: %s", err) //legitimate error, not a timeout.
+				log.Errorf("UPnP read: %s", err) //legitimate error, not a timeout.
 			}
 			break
 		}
 		igds, err := parseResponse(deviceType, resp[:n])
 		if err != nil {
-			log.Printf("UPnP parse: %s", err)
+			// Do we need to print debug info for any device?
+			// log.Errorf("UPnP parse: %s", err)
 			continue
 		}
 		for _, igd := range igds {
@@ -187,11 +210,15 @@ USER-AGENT: go-torrent/1.0
 			results <- &igd
 		}
 	}
-	log.Printf("Discovery for device type %s on %s finished.", deviceType, intf.Name)
+	if Debug {
+		log.Debugf("Discovery for device type %s on %s finished.", deviceType, intf.Name)
+	}
 }
 
 func parseResponse(deviceType string, resp []byte) ([]IGDService, error) {
-	log.Printf("Handling UPnP response:\n\n%s", string(resp))
+	if Debug {
+		log.Debugf("Handling UPnP response:\n\n%s", string(resp))
+	}
 
 	reader := bufio.NewReader(bytes.NewBuffer(resp))
 	request := &http.Request{}
@@ -213,7 +240,7 @@ func parseResponse(deviceType string, resp []byte) ([]IGDService, error) {
 	deviceDescriptionURL, err := url.Parse(deviceDescriptionLocation)
 
 	if err != nil {
-		log.Printf("Invalid IGD location: %s", err.Error())
+		log.Errorf("Invalid IGD location: %s", err.Error())
 	}
 
 	deviceUSN := response.Header.Get("USN")
@@ -323,7 +350,9 @@ func getIGDServices(deviceUUID string, localIPAddress net.IP, rootURL string, de
 	devices := getChildDevices(device, wanDeviceURN)
 
 	if len(devices) < 1 {
-		log.Printf("%s - malformed InternetGatewayDevice description: no WANDevices specified.", rootURL)
+		if Debug {
+			log.Debugf("%s - malformed InternetGatewayDevice description: no WANDevices specified.", rootURL)
+		}
 		return result
 	}
 
@@ -331,23 +360,31 @@ func getIGDServices(deviceUUID string, localIPAddress net.IP, rootURL string, de
 		connections := getChildDevices(device, wanConnectionURN)
 
 		if len(connections) < 1 {
-			log.Printf("%s - malformed %s description: no WANConnectionDevices specified.", rootURL, wanDeviceURN)
+			if Debug {
+				log.Debugf("%s - malformed %s description: no WANConnectionDevices specified.", rootURL, wanDeviceURN)
+			}
 		}
 
 		for _, connection := range connections {
 			for _, URN := range URNs {
 				services := getChildServices(connection, URN)
 
-				log.Printf("%s - no services of type %s found on connection.", rootURL, URN)
+				if Debug {
+					log.Debugf("%s - no services of type %s found on connection.", rootURL, URN)
+				}
 
 				for _, service := range services {
 					if len(service.ControlURL) == 0 {
-						log.Printf("%s- malformed %s description: no control URL.", rootURL, service.Type)
+						if Debug {
+							log.Debugf("%s- malformed %s description: no control URL.", rootURL, service.Type)
+						}
 					} else {
 						u, _ := url.Parse(rootURL)
 						replaceRawPath(u, service.ControlURL)
 
-						log.Printf("%s- found %s with URL %s", rootURL, service.Type, u)
+						if Debug {
+							log.Debugf("%s- found %s with URL %s", rootURL, service.Type, u)
+						}
 
 						service := IGDService{
 							UUID:      deviceUUID,
@@ -414,18 +451,22 @@ func soapRequest(url, service, function, message string) ([]byte, error) {
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Pragma", "no-cache")
 
-	log.Printf("SOAP Request URL: %s", url)
-	log.Printf("SOAP Action: %s", req.Header.Get("SOAPAction"))
-	log.Printf("SOAP Request:\n\n%s", body)
+	if Debug {
+		log.Debugf("SOAP Request URL: %s", url)
+		log.Debugf("SOAP Action: %s", req.Header.Get("SOAPAction"))
+		log.Debugf("SOAP Request:\n\n%s", body)
+	}
 
 	r, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("SOAP do: %s", err)
+		log.Errorf("SOAP do: %s", err)
 		return resp, err
 	}
 
 	resp, _ = ioutil.ReadAll(r.Body)
-	log.Printf("SOAP Response: %s\n\n%s\n\n", r.Status, resp)
+	if Debug {
+		log.Debugf("SOAP Response: %s\n\n%s\n\n", r.Status, resp)
+	}
 
 	r.Body.Close()
 

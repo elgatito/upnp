@@ -11,8 +11,6 @@ import (
 	"net"
 	"sync"
 	"time"
-
-	"github.com/anacrolix/log"
 )
 
 type MappingChangeSubscriber func(*Mapping, []Address, []Address)
@@ -30,7 +28,7 @@ type Mapping struct {
 func (m *Mapping) setAddress(id string, address Address) {
 	m.mut.Lock()
 	if existing, ok := m.extAddresses[id]; !ok || !existing.Equal(address) {
-		log.Printf("New NAT port mapping: external %s address %s to local address %s.", m.protocol, address, m.address)
+		log.Infof("New NAT port mapping: external %s address %s to local address %s.", m.protocol, address, m.address)
 		m.extAddresses[id] = address
 	}
 	m.mut.Unlock()
@@ -40,7 +38,7 @@ func (m *Mapping) removeAddress(id string) {
 	m.mut.Lock()
 	addr, ok := m.extAddresses[id]
 	if ok {
-		log.Printf("Removing NAT port mapping: external %s address %s, NAT %s is no longer available.", m.protocol, addr, id)
+		log.Infof("Removing NAT port mapping: external %s address %s, NAT %s is no longer available.", m.protocol, addr, id)
 		delete(m.extAddresses, id)
 	}
 	m.mut.Unlock()
@@ -50,7 +48,7 @@ func (m *Mapping) clearAddresses() {
 	m.mut.Lock()
 	var removed []Address
 	for id, addr := range m.extAddresses {
-		log.Printf("Clearing mapping %s: ID: %s Address: %s", m, id, addr)
+		log.Infof("Clearing mapping %s: ID: %s Address: %s", m, id, addr)
 		removed = append(removed, addr)
 		delete(m.extAddresses, id)
 	}
