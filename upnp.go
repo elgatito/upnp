@@ -47,12 +47,10 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/op/go-logging"
 )
 
 var (
-	log = logging.MustGetLogger("main")
+	log logger
 
 	// Debug Set this to true to print debug information
 	Debug = false
