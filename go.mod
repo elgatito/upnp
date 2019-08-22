@@ -1,4 +1,4 @@
-module github.com/elgatito/upnp
+module github.com/anacrolix/upnp
 
 go 1.12
 
