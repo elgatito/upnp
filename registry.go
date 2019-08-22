@@ -9,9 +9,11 @@ package upnp
 import (
 	"sync"
 	"time"
+
+	"github.com/anacrolix/log"
 )
 
-type DiscoverFunc func(renewal, timeout time.Duration) []Device
+type DiscoverFunc func(renewal, timeout time.Duration, _ log.Logger) []Device
 
 var providers []DiscoverFunc
 
@@ -19,7 +21,7 @@ func Register(provider DiscoverFunc) {
 	providers = append(providers, provider)
 }
 
-func discoverAll(renewal, timeout time.Duration) map[string]Device {
+func discoverAll(renewal, timeout time.Duration, ll levelLogger) map[string]Device {
 	wg := &sync.WaitGroup{}
 	wg.Add(len(providers))
 
@@ -28,7 +30,7 @@ func discoverAll(renewal, timeout time.Duration) map[string]Device {
 
 	for _, discoverFunc := range providers {
 		go func(f DiscoverFunc) {
-			for _, dev := range f(renewal, timeout) {
+			for _, dev := range f(renewal, timeout, ll.Logger) {
 				c <- dev
 			}
 			wg.Done()
