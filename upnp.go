@@ -48,14 +48,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/op/go-logging"
+	"github.com/anacrolix/log"
 )
 
 var (
-	log = logging.MustGetLogger("main")
-
 	// Debug Set this to true to print debug information
-	Debug = false
+	Debug = true
 )
 
 func init() {
@@ -81,7 +79,9 @@ type upnpRoot struct {
 
 // Discover discovers UPnP InternetGatewayDevices.
 // The order in which the devices appear in the results list is not deterministic.
-func Discover(renewal, timeout time.Duration) []Device {
+func Discover(renewal, timeout time.Duration, logger log.Logger) []Device {
+	log := levelLogger{logger}
+
 	var results []Device
 
 	interfaces, err := net.Interfaces()
@@ -103,7 +103,7 @@ func Discover(renewal, timeout time.Duration) []Device {
 		for _, deviceType := range []string{"urn:schemas-upnp-org:device:InternetGatewayDevice:1", "urn:schemas-upnp-org:device:InternetGatewayDevice:2"} {
 			wg.Add(1)
 			go func(intf net.Interface, deviceType string) {
-				discover(&intf, deviceType, timeout, resultChan)
+				discover(&intf, deviceType, timeout, resultChan, log)
 				wg.Done()
 			}(intf, deviceType)
 		}
@@ -135,7 +135,7 @@ nextResult:
 
 // Search for UPnP InternetGatewayDevices for <timeout> seconds, ignoring responses from any devices listed in knownDevices.
 // The order in which the devices appear in the result list is not deterministic
-func discover(intf *net.Interface, deviceType string, timeout time.Duration, results chan<- Device) {
+func discover(intf *net.Interface, deviceType string, timeout time.Duration, results chan<- Device, log levelLogger) {
 	ssdp := &net.UDPAddr{IP: []byte{239, 255, 255, 250}, Port: 1900}
 
 	tpl := `M-SEARCH * HTTP/1.1
@@ -199,7 +199,7 @@ USER-AGENT: go-torrent/1.0
 			}
 			break
 		}
-		igds, err := parseResponse(deviceType, resp[:n])
+		igds, err := parseResponse(deviceType, resp[:n], log)
 		if err != nil {
 			// Do we need to print debug info for any device?
 			// log.Errorf("UPnP parse: %s", err)
@@ -215,7 +215,7 @@ USER-AGENT: go-torrent/1.0
 	}
 }
 
-func parseResponse(deviceType string, resp []byte) ([]IGDService, error) {
+func parseResponse(deviceType string, resp []byte, log levelLogger) ([]IGDService, error) {
 	if Debug {
 		log.Debugf("Handling UPnP response:\n\n%s", string(resp))
 	}
@@ -274,7 +274,7 @@ func parseResponse(deviceType string, resp []byte) ([]IGDService, error) {
 		return nil, err
 	}
 
-	services, err := getServiceDescriptions(deviceUUID, localIPAddress, deviceDescriptionLocation, upnpRoot.Device)
+	services, err := getServiceDescriptions(deviceUUID, localIPAddress, deviceDescriptionLocation, upnpRoot.Device, log)
 	if err != nil {
 		return nil, err
 	}
@@ -317,21 +317,23 @@ func getChildServices(d upnpDevice, serviceType string) []upnpService {
 	return result
 }
 
-func getServiceDescriptions(deviceUUID string, localIPAddress net.IP, rootURL string, device upnpDevice) ([]IGDService, error) {
+func getServiceDescriptions(deviceUUID string, localIPAddress net.IP, rootURL string, device upnpDevice, ll levelLogger) ([]IGDService, error) {
 	var result []IGDService
 
 	if device.DeviceType == "urn:schemas-upnp-org:device:InternetGatewayDevice:1" {
 		descriptions := getIGDServices(deviceUUID, localIPAddress, rootURL, device,
 			"urn:schemas-upnp-org:device:WANDevice:1",
 			"urn:schemas-upnp-org:device:WANConnectionDevice:1",
-			[]string{"urn:schemas-upnp-org:service:WANIPConnection:1", "urn:schemas-upnp-org:service:WANPPPConnection:1"})
+			[]string{"urn:schemas-upnp-org:service:WANIPConnection:1", "urn:schemas-upnp-org:service:WANPPPConnection:1"},
+			ll)
 
 		result = append(result, descriptions...)
 	} else if device.DeviceType == "urn:schemas-upnp-org:device:InternetGatewayDevice:2" {
 		descriptions := getIGDServices(deviceUUID, localIPAddress, rootURL, device,
 			"urn:schemas-upnp-org:device:WANDevice:2",
 			"urn:schemas-upnp-org:device:WANConnectionDevice:2",
-			[]string{"urn:schemas-upnp-org:service:WANIPConnection:2", "urn:schemas-upnp-org:service:WANPPPConnection:2"})
+			[]string{"urn:schemas-upnp-org:service:WANIPConnection:2", "urn:schemas-upnp-org:service:WANPPPConnection:2"},
+			ll)
 
 		result = append(result, descriptions...)
 	} else {
@@ -344,16 +346,24 @@ func getServiceDescriptions(deviceUUID string, localIPAddress net.IP, rootURL st
 	return result, nil
 }
 
-func getIGDServices(deviceUUID string, localIPAddress net.IP, rootURL string, device upnpDevice, wanDeviceURN string, wanConnectionURN string, URNs []string) []IGDService {
-	var result []IGDService
+func getIGDServices(
+	deviceUUID string,
+	localIPAddress net.IP,
+	rootURL string,
+	device upnpDevice,
+	wanDeviceURN string,
+	wanConnectionURN string,
+	URNs []string,
+	logger levelLogger,
+) (ret []IGDService) {
 
 	devices := getChildDevices(device, wanDeviceURN)
 
 	if len(devices) < 1 {
 		if Debug {
-			log.Debugf("%s - malformed InternetGatewayDevice description: no WANDevices specified.", rootURL)
+			logger.Debugf("%s - malformed InternetGatewayDevice description: no WANDevices specified.", rootURL)
 		}
-		return result
+		return
 	}
 
 	for _, device := range devices {
@@ -361,7 +371,7 @@ func getIGDServices(deviceUUID string, localIPAddress net.IP, rootURL string, de
 
 		if len(connections) < 1 {
 			if Debug {
-				log.Debugf("%s - malformed %s description: no WANConnectionDevices specified.", rootURL, wanDeviceURN)
+				logger.Debugf("%s - malformed %s description: no WANConnectionDevices specified.", rootURL, wanDeviceURN)
 			}
 		}
 
@@ -370,20 +380,20 @@ func getIGDServices(deviceUUID string, localIPAddress net.IP, rootURL string, de
 				services := getChildServices(connection, URN)
 
 				if Debug {
-					log.Debugf("%s - no services of type %s found on connection.", rootURL, URN)
+					logger.Debugf("%s - no services of type %s found on connection.", rootURL, URN)
 				}
 
 				for _, service := range services {
 					if len(service.ControlURL) == 0 {
 						if Debug {
-							log.Debugf("%s- malformed %s description: no control URL.", rootURL, service.Type)
+							logger.Debugf("%s- malformed %s description: no control URL.", rootURL, service.Type)
 						}
 					} else {
 						u, _ := url.Parse(rootURL)
 						replaceRawPath(u, service.ControlURL)
 
 						if Debug {
-							log.Debugf("%s- found %s with URL %s", rootURL, service.Type, u)
+							logger.Debugf("%s- found %s with URL %s", rootURL, service.Type, u)
 						}
 
 						service := IGDService{
@@ -393,16 +403,17 @@ func getIGDServices(deviceUUID string, localIPAddress net.IP, rootURL string, de
 							URL:       u.String(),
 							URN:       service.Type,
 							LocalIP:   localIPAddress,
+							ll:        logger,
 						}
 
-						result = append(result, service)
+						ret = append(ret, service)
 					}
 				}
 			}
 		}
 	}
 
-	return result
+	return
 }
 
 func replaceRawPath(u *url.URL, rp string) {
@@ -429,7 +440,7 @@ func replaceRawPath(u *url.URL, rp string) {
 	}
 }
 
-func soapRequest(url, service, function, message string) ([]byte, error) {
+func soapRequest(url, service, function, message string, log levelLogger) ([]byte, error) {
 	tpl := `<?xml version="1.0" ?>
 	<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
 	<s:Body>%s</s:Body>

@@ -47,6 +47,7 @@ type IGDService struct {
 	URL       string
 	URN       string
 	LocalIP   net.IP
+	ll        levelLogger
 }
 
 // AddPortMapping adds a port mapping to the specified IGD service.
@@ -63,7 +64,7 @@ func (s *IGDService) AddPortMapping(protocol Protocol, internalPort, externalPor
 	</u:AddPortMapping>`
 	body := fmt.Sprintf(tpl, s.URN, externalPort, protocol, internalPort, s.LocalIP, description, duration/time.Second)
 
-	response, err := soapRequest(s.URL, s.URN, "AddPortMapping", body)
+	response, err := soapRequest(s.URL, s.URN, "AddPortMapping", body, s.ll)
 	if err != nil && duration > 0 {
 		// Try to repair error code 725 - OnlyPermanentLeasesSupported
 		envelope := &soapErrorResponse{}
@@ -87,7 +88,7 @@ func (s *IGDService) DeletePortMapping(protocol Protocol, externalPort int) erro
 	</u:DeletePortMapping>`
 	body := fmt.Sprintf(tpl, s.URN, externalPort, protocol)
 
-	_, err := soapRequest(s.URL, s.URN, "DeletePortMapping", body)
+	_, err := soapRequest(s.URL, s.URN, "DeletePortMapping", body, s.ll)
 	return err
 }
 
@@ -99,7 +100,7 @@ func (s *IGDService) GetExternalIPAddress() (net.IP, error) {
 
 	body := fmt.Sprintf(tpl, s.URN)
 
-	response, err := soapRequest(s.URL, s.URN, "GetExternalIPAddress", body)
+	response, err := soapRequest(s.URL, s.URN, "GetExternalIPAddress", body, s.ll)
 
 	if err != nil {
 		return nil, err
